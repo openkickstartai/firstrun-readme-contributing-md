@@ -3,11 +3,19 @@
 import argparse
 import json
 import sys
+from pathlib import Path
 from firstrun import scan, format_sarif
-
 
 def cmd_scan(args):
     """Execute the scan command."""
+    repo_path = Path(args.path).resolve()
+    if not repo_path.exists():
+        print(f"\u274c Error: path '{args.path}' does not exist")
+        sys.exit(1)
+    if not repo_path.is_dir():
+        print(f"\u274c Error: path '{args.path}' is not a directory")
+        sys.exit(1)
+    result = scan(str(repo_path), check_urls_flag=args.check_links)
     result = scan(args.path, check_urls_flag=args.check_links)
     if args.format == "sarif":
         output = json.dumps(format_sarif(result), indent=2)
