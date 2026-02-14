@@ -106,3 +106,72 @@ def test_format_sarif_valid_structure():
         assert len(sarif["runs"]) == 1
         assert sarif["runs"][0]["tool"]["driver"]["name"] == "FirstRun"
         assert len(sarif["runs"][0]["results"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# Security-focused tests
+# ---------------------------------------------------------------------------
+import pytest
+from security import is_private_url, is_path_within_root
+
+
+def test_scan_handles_empty_readme():
+    """Empty README must not crash the scanner."""
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "README.md").write_text("")
+        result = scan(d)
+        assert result.score >= 0
+
+
+def test_scan_handles_binary_content_gracefully():
+    """README with binary garbage must not raise an unhandled exception."""
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "README.md").write_bytes(b"\x00\x01\x02\xff# Title\n")
+        try:
+            scan(d)
+        except UnicodeDecodeError:
+            pytest.fail("scan() crashed on binary content — needs encoding error handling")
+
+
+def test_path_traversal_stays_in_repo():
+    """References like ../../etc/passwd must be detected as escaping repo root."""
+    with tempfile.TemporaryDirectory() as d:
+        assert is_path_within_root("src/main.py", d) is True
+        assert is_path_within_root(".env", d) is True
+        assert is_path_within_root("../../../etc/passwd", d) is False
+        assert is_path_within_root("/etc/shadow", d) is False
+
+
+def test_path_traversal_in_file_refs_does_not_crash():
+    """File refs with ../ must not cause scanner to access files outside repo."""
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "README.md").write_text(
+            "Edit `../../../etc/passwd` carefully.\n"
+        )
+        result = scan(d)
+        assert result is not None
+
+
+def test_is_private_url_blocks_localhost():
+    assert is_private_url("http://127.0.0.1/admin") is True
+    assert is_private_url("http://localhost:8080") is True
+
+
+def test_is_private_url_blocks_metadata():
+    """Cloud metadata endpoint must always be blocked."""
+    assert is_private_url("http://169.254.169.254/latest/meta-data/") is True
+    assert is_private_url("http://metadata.google.internal/computeMetadata/v1/") is True
+
+
+def test_is_private_url_blocks_rfc1918():
+    assert is_private_url("http://10.0.0.1:9200/") is True
+    assert is_private_url("http://192.168.1.1/") is True
+    assert is_private_url("http://172.16.0.1/") is True
+
+
+def test_extract_code_blocks_no_crash_on_unclosed_fence():
+    """Unclosed code fences must not cause infinite loops or crashes."""
+    md = "# Setup\n\n```bash\nmake install\n"
+    blocks = extract_code_blocks(md)
+    # Should return 0 or 1 blocks, but must not hang
+    assert isinstance(blocks, list)
